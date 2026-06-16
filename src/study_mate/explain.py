@@ -133,6 +133,15 @@ def generate_explainers(
     explainers_dir = out_dir / "explainers"
     explainers_dir.mkdir(parents=True, exist_ok=True)
 
+    docs_with_text = sum(1 for d in docs if d.has_text)
+    log(f"Read {len(docs)} PDF(s); {docs_with_text} with extractable text.")
+
+    total_words = 0
+    total_source_tokens = 0
+    total_sent_tokens = 0
+    total_received_tokens = 0
+    generated_count = 0
+
     manifest: list[Explainer] = []
     for doc in docs:
         if not doc.has_text:
@@ -157,15 +166,26 @@ def generate_explainers(
                 log(f"  = {name}: exists, skipped (use --force to regenerate)")
                 continue
 
-            log(f"  + {name}: generating ({estimate_tokens(chunk.text)} input tokens)\u2026")
+            words = len(chunk.text.split())
+            source_tokens = estimate_tokens(chunk.text)
+            log(f"  + {name}: generating ({words} words, ~{source_tokens} input tokens)\u2026")
             comp = compress.compress_text(chunk.text, role="explainer")
             if comp.applied:
                 log(
                     f"    headroom: {comp.tokens_before}\u2192{comp.tokens_after} tokens "
                     f"({comp.savings_percent:.0f}% saved)"
                 )
+            sent_tokens = estimate_tokens(comp.text)
             doc_html = llm.generate_explainer(chunk.title, comp.text, level)
+            received_tokens = estimate_tokens(doc_html)
+            log(f"    ~{sent_tokens} tokens sent to LLM \u2192 ~{received_tokens} tokens received")
             path.write_text(doc_html, encoding="utf-8")
+
+            total_words += words
+            total_source_tokens += source_tokens
+            total_sent_tokens += sent_tokens
+            total_received_tokens += received_tokens
+            generated_count += 1
 
     (explainers_dir / "manifest.json").write_text(
         json.dumps(
@@ -175,4 +195,12 @@ def generate_explainers(
         encoding="utf-8",
     )
     render.render_explainer_index(manifest, explainers_dir)
+
+    log(
+        f"Summary: {generated_count} explainer(s) generated from "
+        f"{docs_with_text}/{len(docs)} PDF(s) | "
+        f"{total_words:,} words (~{total_source_tokens:,} source tokens) | "
+        f"~{total_sent_tokens:,} tokens sent to LLM | "
+        f"~{total_received_tokens:,} tokens received"
+    )
     return manifest
