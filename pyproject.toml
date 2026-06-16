@@ -1,0 +1,47 @@
+[project]
+name = "study-mate"
+version = "0.1.0"
+description = "Turn study PDFs into AI-written HTML explainers with an AI question panel."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pymupdf>=1.24",
+    "fastapi>=0.111",
+    "uvicorn>=0.30",
+    "jinja2>=3.1",
+    "pydantic>=2.7",
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+    "truststore>=0.9",
+]
+
+[project.scripts]
+study-mate = "study_mate.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+# Optional token-reduction layer. Heavy (Rust build; text model needs extras).
+# Install with: uv sync --extra compress   (or pip install "study-mate[compress]")
+# For actual prose compression also add headroom's ML runtime (onnxruntime):
+#   pip install "headroom-ai[proxy]"   (lighter)  or  "headroom-ai[ml]" (torch)
+compress = [
+    "headroom-ai>=0.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/study_mate"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

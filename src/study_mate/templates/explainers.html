@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StudyMate — Explainers</title>
+<style>
+  :root {
+    --bg: #0e1320;
+    --surface: #161f33;
+    --surface-2: #1c2740;
+    --text: #e8edf7;
+    --muted: #97a3bd;
+    --accent: #2dd4bf;
+    --border: #283450;
+    --warn: #f8c069;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  .topbar {
+    display: flex; align-items: center; gap: 14px;
+    padding: 12px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  .topbar h1 { font-size: 16px; margin: 0; }
+  .topbar .meta { margin-left: auto; color: var(--muted); font-size: 13px; }
+
+  /* 3 columns: navigation · AI explainer · question panel */
+  .layout {
+    display: grid;
+    grid-template-columns: 280px 1fr 360px;
+    height: calc(100vh - 53px);
+  }
+  .nav { overflow-y: auto; border-right: 1px solid var(--border); background: var(--surface); padding: 12px; }
+  .nav input {
+    width: 100%; padding: 8px 10px; margin-bottom: 12px;
+    border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--text);
+  }
+  .group-title {
+    font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--muted); margin: 14px 8px 6px;
+  }
+  .nav ul { list-style: none; margin: 0; padding: 0; }
+  .nav a {
+    display: block; padding: 8px 10px; border-radius: 8px;
+    color: var(--text); text-decoration: none; font-size: 14px;
+  }
+  .nav a small { display: block; color: var(--muted); font-size: 12px; }
+  .nav a:hover { background: var(--surface-2); }
+  .nav a.active { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--accent); }
+
+  .viewer { position: relative; }
+  iframe { width: 100%; height: 100%; border: 0; background: var(--bg); }
+  .empty {
+    display: grid; place-items: center; height: 100%;
+    color: var(--muted); padding: 24px; text-align: center;
+  }
+
+  /* AI question panel */
+  .panel {
+    overflow-y: auto; border-left: 1px solid var(--border);
+    background: var(--surface); padding: 16px;
+  }
+  .panel h2 { font-size: 15px; margin: 0 0 4px; }
+  .panel-context { color: var(--muted); font-size: 13px; margin: 0 0 12px; line-height: 1.5; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .actions button {
+    flex: 1 0 auto; padding: 8px 10px; font-size: 13px; cursor: pointer;
+    border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--text);
+  }
+  .actions button:hover:not(:disabled) { border-color: var(--accent); }
+  .actions button:disabled { opacity: .5; cursor: default; }
+  .level { display: block; font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+  .level select {
+    margin-left: 6px; padding: 5px 8px; border-radius: 7px;
+    border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+  }
+  .panel-warning {
+    background: rgba(248,192,105,.12); border: 1px solid var(--warn);
+    color: var(--warn); padding: 8px 10px; border-radius: 8px;
+    font-size: 13px; margin-bottom: 12px;
+  }
+  .panel-output {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px; font-size: 14px; line-height: 1.6; min-height: 80px;
+  }
+  .panel-output .hint { color: var(--muted); font-size: 13px; }
+  .panel-output .loading { color: var(--accent); }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <h1>StudyMate · Explainers</h1>
+    <span class="meta">{{ entries | length }} document(s)</span>
+  </div>
+  <div class="layout">
+    <!-- Navigation -->
+    <nav class="nav">
+      <input id="filter" type="search" placeholder="Filter explainers…" aria-label="Filter explainers">
+      <div id="list"></div>
+    </nav>
+
+    <!-- AI explainer viewer -->
+    <div class="viewer">
+      {% if entries %}
+      <iframe id="frame" title="Explainer"></iframe>
+      {% else %}
+      <div class="empty">
+        <p>No explainers yet.<br>Add PDFs to <code>materials/</code> then run
+          <code>uv run study-mate explain</code>.</p>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- AI question panel -->
+    <aside class="panel" aria-label="AI study panel">
+      <h2>Ask about this explainer</h2>
+      <p class="panel-context" id="panel-context">Select a document to begin.</p>
+
+      <div class="actions">
+        <button data-action="summarise">Summarise</button>
+        <button data-action="explain">Explain simply</button>
+        <button data-action="quiz">Quiz me</button>
+        <button data-action="flashcards">Flashcards</button>
+        <button data-action="key_terms">Key terms</button>
+      </div>
+
+      <label class="level">
+        Level:
+        <select id="level">
+          <option value="beginner">Beginner</option>
+          <option value="intermediate" selected>Intermediate</option>
+          <option value="advanced">Advanced</option>
+        </select>
+      </label>
+
+      <div id="panel-warning" class="panel-warning" hidden></div>
+      <div id="panel-output" class="panel-output">
+        <p class="hint">Pick an action above. The AI sees this explainer's source
+          material — or text you highlight in the document — to keep token use low.</p>
+      </div>
+    </aside>
+  </div>
+  <script>
+    "use strict";
+    const ENTRIES = {{ entries_json | safe }};
+    const MAX_CONTEXT_CHARS = 11000; // stay under the server's request cap
+
+    const list = document.getElementById('list');
+    const frame = document.getElementById('frame');
+    const filter = document.getElementById('filter');
+    const contextEl = document.getElementById('panel-context');
+    const outputEl = document.getElementById('panel-output');
+    const warningEl = document.getElementById('panel-warning');
+    const levelEl = document.getElementById('level');
+    const buttons = document.querySelectorAll('.actions button');
+
+    let current = null; // currently viewed entry
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str == null ? '' : String(str);
+      return div.innerHTML;
+    }
+
+    // --- Navigation ------------------------------------------------------
+    function render(items) {
+      const groups = {};
+      for (const e of items) (groups[e.source] ||= []).push(e);
+      list.innerHTML = '';
+      for (const [source, group] of Object.entries(groups)) {
+        const h = document.createElement('div');
+        h.className = 'group-title';
+        h.textContent = source;
+        list.appendChild(h);
+        const ul = document.createElement('ul');
+        for (const e of group) {
+          const li = document.createElement('li');
+          const a = document.createElement('a');
+          a.href = '#' + encodeURIComponent(e.file);
+          a.dataset.file = e.file;
+          a.innerHTML = '<span>' + escapeHtml(e.title) + '</span><small>' +
+            escapeHtml(e.page_range) + '</small>';
+          a.addEventListener('click', (ev) => { ev.preventDefault(); open(e.file); });
+          li.appendChild(a);
+          ul.appendChild(li);
+        }
+        list.appendChild(ul);
+      }
+    }
+
+    function open(file) {
+      const entry = ENTRIES.find((e) => e.file === file);
+      if (!entry) return;
+      current = entry;
+      if (frame) frame.src = file;
+      location.hash = encodeURIComponent(file);
+      for (const a of list.querySelectorAll('a')) {
+        a.classList.toggle('active', a.dataset.file === file);
+      }
+      refreshContext();
+    }
+
+    filter.addEventListener('input', () => {
+      const q = filter.value.toLowerCase();
+      render(ENTRIES.filter((e) =>
+        e.title.toLowerCase().includes(q) || e.source.toLowerCase().includes(q)));
+    });
+
+    // --- Panel context ---------------------------------------------------
+    // Read any text the user highlighted inside the (same-origin) iframe.
+    function highlightText() {
+      try {
+        const sel = frame && frame.contentWindow && frame.contentWindow.getSelection();
+        return sel ? sel.toString().trim() : '';
+      } catch (e) {
+        return '';
+      }
+    }
+
+    function activePayload() {
+      const highlight = highlightText();
+      if (highlight) return { text: highlight, scope: 'highlight', title: 'Highlighted text' };
+      if (!current) return null;
+      return { text: current.text || '', scope: 'document', title: current.title, entry: current };
+    }
+
+    function refreshContext() {
+      const payload = activePayload();
+      if (!payload) { contextEl.textContent = 'Select a document to begin.'; return; }
+      if (payload.scope === 'highlight') {
+        contextEl.innerHTML =
+          `AI will use your <strong>highlighted text</strong> (${payload.text.length} chars).`;
+      } else {
+        const e = payload.entry;
+        contextEl.innerHTML =
+          `Current: <strong>${escapeHtml(e.title)}</strong>` +
+          `<br><small>${escapeHtml(e.source)} · ${escapeHtml(e.page_range)} · ` +
+          `${(e.text || '').length} chars</small>`;
+      }
+      warningEl.hidden = !(payload.scope === 'document' && payload.text.length > MAX_CONTEXT_CHARS);
+      if (!warningEl.hidden) {
+        warningEl.textContent =
+          'This explainer is long, so only the first part is sent. Highlight a section for a focused answer.';
+      }
+    }
+
+    // Track highlight changes within the iframe once it loads.
+    if (frame) {
+      frame.addEventListener('load', () => {
+        try {
+          frame.contentDocument.addEventListener('selectionchange',
+            () => window.requestAnimationFrame(refreshContext));
+        } catch (e) { /* cross-origin guard; ignored */ }
+        refreshContext();
+      });
+    }
+
+    // --- AI actions ------------------------------------------------------
+    function setBusy(b) { buttons.forEach((btn) => (btn.disabled = b)); }
+
+    async function runAction(action) {
+      const payload = activePayload();
+      if (!payload || !payload.text) {
+        outputEl.innerHTML = '<p class="panel-warning">No text available. Open a document or highlight some text.</p>';
+        return;
+      }
+      const text = payload.text.slice(0, MAX_CONTEXT_CHARS);
+      const entry = payload.entry || {};
+      setBusy(true);
+      outputEl.innerHTML = `<p class="loading">Thinking about “${escapeHtml(payload.title)}”…</p>`;
+      try {
+        const res = await fetch('/api/study', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action,
+            text,
+            level: levelEl.value,
+            section_title: payload.title,
+            source_pdf: entry.source || null,
+            page_range: entry.page_range || null,
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }));
+          outputEl.innerHTML = `<p class="panel-warning">${escapeHtml(err.detail || 'Request failed')}</p>`;
+          return;
+        }
+        const data = await res.json();
+        outputEl.innerHTML = data.html;
+      } catch (e) {
+        outputEl.innerHTML = '<p class="panel-warning">Could not reach the AI service. Is the server running?</p>';
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    buttons.forEach((btn) => btn.addEventListener('click', () => runAction(btn.dataset.action)));
+
+    // --- Init ------------------------------------------------------------
+    render(ENTRIES);
+    if (ENTRIES.length) {
+      const want = decodeURIComponent(location.hash.slice(1));
+      open(ENTRIES.some((e) => e.file === want) ? want : ENTRIES[0].file);
+    }
+  </script>
+</body>
+</html>
