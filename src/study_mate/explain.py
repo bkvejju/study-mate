@@ -1,10 +1,10 @@
-"""Step 1 of the workflow: read PDFs and use AI to generate simple, standalone
-HTML explainer docs.
+"""Step 1 workflow: read notes + exam PDFs and generate standalone explainers.
 
-Token usage is controlled by a budget: each PDF is split into chunks that fit
-within a configurable input-token budget, and one explainer HTML file is
-generated per chunk. Files are written incrementally and existing files are
-skipped on re-runs, so generation stays cheap and resumable ("as needed").
+Token usage is controlled by a budget: each notes PDF is split into chunks that
+fit within a configurable input-token budget. For each notes chunk, related
+exam-paper snippets are matched and included in the AI prompt so the output is
+revision-focused. Files are written incrementally and existing files are
+skipped on re-runs, so generation stays cheap and resumable.
 """
 
 from __future__ import annotations
@@ -55,6 +55,15 @@ class Explainer:
     text: str = ""  # source material for this chunk (panel context; not persisted)
 
 
+@dataclass
+class ExamSnippet:
+    """A compact exam-paper excerpt considered during section generation."""
+
+    source: str
+    page_number: int
+    text: str
+
+
 def estimate_tokens(text: str) -> int:
     """Rough input-token estimate for a piece of text."""
     return max(1, len(text) // APPROX_CHARS_PER_TOKEN)
@@ -62,6 +71,91 @@ def estimate_tokens(text: str) -> int:
 
 def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "doc"
+
+
+def _normalise_spaces(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _keyword_set(text: str) -> set[str]:
+    stop = {
+        "about",
+        "after",
+        "again",
+        "below",
+        "being",
+        "could",
+        "every",
+        "first",
+        "from",
+        "have",
+        "into",
+        "just",
+        "like",
+        "more",
+        "most",
+        "other",
+        "over",
+        "same",
+        "some",
+        "such",
+        "than",
+        "that",
+        "their",
+        "there",
+        "these",
+        "they",
+        "this",
+        "through",
+        "under",
+        "very",
+        "what",
+        "when",
+        "which",
+        "while",
+        "with",
+        "would",
+    }
+    words = set(re.findall(r"[a-z0-9]{4,}", text.lower()))
+    return {w for w in words if w not in stop}
+
+
+def _exam_snippets_for_course(docs: list[DocumentText], course_key: str) -> list[ExamSnippet]:
+    snippets: list[ExamSnippet] = []
+    for doc in docs:
+        if doc.course_key != course_key:
+            continue
+        for page in doc.pages:
+            if not page.text.strip():
+                continue
+            snippets.append(
+                ExamSnippet(
+                    source=doc.source,
+                    page_number=page.page_number,
+                    text=_normalise_spaces(page.text),
+                )
+            )
+    return snippets
+
+
+def _match_exam_snippets(section_text: str, snippets: list[ExamSnippet], limit: int = 3) -> list[str]:
+    """Pick the most relevant exam snippets for a notes section via keyword overlap."""
+    section_words = _keyword_set(section_text)
+    if not section_words or not snippets:
+        return []
+
+    scored: list[tuple[int, ExamSnippet]] = []
+    for snippet in snippets:
+        overlap = len(section_words & _keyword_set(snippet.text))
+        if overlap > 0:
+            scored.append((overlap, snippet))
+    scored.sort(key=lambda t: t[0], reverse=True)
+
+    selected: list[str] = []
+    for _score, snippet in scored[:limit]:
+        preview = snippet.text[:320].strip()
+        selected.append(f"{snippet.source} p.{snippet.page_number}: {preview}")
+    return selected
 
 
 def chunk_document(doc: DocumentText, token_budget: int = DEFAULT_TOKEN_BUDGET) -> list[Chunk]:
@@ -118,23 +212,30 @@ def chunk_document(doc: DocumentText, token_budget: int = DEFAULT_TOKEN_BUDGET) 
 
 
 def generate_explainers(
-    docs: list[DocumentText],
+    notes_docs: list[DocumentText],
     out_dir: Path,
+    exam_docs: list[DocumentText] | None = None,
     token_budget: int = DEFAULT_TOKEN_BUDGET,
     level: str = "intermediate",
     force: bool = False,
     log: Callable[[str], None] = print,
 ) -> list[Explainer]:
-    """Generate one explainer HTML file per chunk across all documents.
+    """Generate one exam-oriented explainer per notes section.
 
-    Files are written as they are produced. Existing files are skipped unless
-    ``force`` is set, so re-running only generates what is missing.
+    Notes are chunked by token budget to create section-level explainers. Related
+    exam-paper snippets are matched to each notes section and included in the AI
+    prompt to keep output revision-focused.
     """
     explainers_dir = out_dir / "explainers"
     explainers_dir.mkdir(parents=True, exist_ok=True)
 
-    docs_with_text = sum(1 for d in docs if d.has_text)
-    log(f"Read {len(docs)} PDF(s); {docs_with_text} with extractable text.")
+    exam_docs = exam_docs or []
+    notes_with_text = sum(1 for d in notes_docs if d.has_text)
+    exams_with_text = sum(1 for d in exam_docs if d.has_text)
+    log(
+        f"Read {len(notes_docs)} notes PDF(s); {notes_with_text} with extractable text. "
+        f"Read {len(exam_docs)} exam PDF(s); {exams_with_text} with extractable text."
+    )
 
     total_words = 0
     total_source_tokens = 0
@@ -143,15 +244,17 @@ def generate_explainers(
     generated_count = 0
 
     manifest: list[Explainer] = []
-    for doc in docs:
+    for doc in notes_docs:
         if not doc.has_text:
             log(f"  ! {doc.source}: no extractable text (scanned PDF?). Skipped.")
             continue
 
         chunks = chunk_document(doc, token_budget)
+        course_key = doc.course_key or _slug(Path(doc.source).stem)
+        course_exam_snippets = _exam_snippets_for_course(exam_docs, course_key)
         base = _slug(Path(doc.source).stem)
         for chunk in chunks:
-            name = f"{base}-{chunk.index:02d}.html" if len(chunks) > 1 else f"{base}.html"
+            name = f"{base}-section-{chunk.index:02d}.html" if len(chunks) > 1 else f"{base}.html"
             path = explainers_dir / name
             entry = Explainer(
                 source=doc.source,
@@ -168,17 +271,29 @@ def generate_explainers(
 
             words = len(chunk.text.split())
             source_tokens = estimate_tokens(chunk.text)
-            log(f"  + {name}: generating ({words} words, ~{source_tokens} input tokens)\u2026")
+            log(f"  + {name}: generating ({words} words, ~{source_tokens} input tokens)...")
             comp = compress.compress_text(chunk.text, role="explainer")
             if comp.applied:
                 log(
-                    f"    headroom: {comp.tokens_before}\u2192{comp.tokens_after} tokens "
+                    f"    headroom: {comp.tokens_before}->{comp.tokens_after} tokens "
                     f"({comp.savings_percent:.0f}% saved)"
                 )
             sent_tokens = estimate_tokens(comp.text)
-            doc_html = llm.generate_explainer(chunk.title, comp.text, level)
+
+            matched_exam = _match_exam_snippets(chunk.text, course_exam_snippets)
+            if matched_exam:
+                log(f"    matched {len(matched_exam)} related exam snippet(s)")
+            else:
+                log("    no strong exam match found; using notes-only exam guidance")
+
+            doc_html = llm.generate_explainer(
+                chunk.title,
+                comp.text,
+                level,
+                exam_snippets=matched_exam,
+            )
             received_tokens = estimate_tokens(doc_html)
-            log(f"    ~{sent_tokens} tokens sent to LLM \u2192 ~{received_tokens} tokens received")
+            log(f"    ~{sent_tokens} tokens sent to LLM -> ~{received_tokens} tokens received")
             path.write_text(doc_html, encoding="utf-8")
 
             total_words += words
@@ -198,8 +313,8 @@ def generate_explainers(
 
     log(
         f"Summary: {generated_count} explainer(s) generated from "
-        f"{docs_with_text}/{len(docs)} PDF(s) | "
-        f"{total_words:,} words (~{total_source_tokens:,} source tokens) | "
+        f"{notes_with_text}/{len(notes_docs)} note PDF(s) | "
+        f"~{total_words:,} words (~{total_source_tokens:,} source tokens) | "
         f"~{total_sent_tokens:,} tokens sent to LLM | "
         f"~{total_received_tokens:,} tokens received"
     )

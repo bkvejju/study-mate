@@ -71,3 +71,44 @@ def test_scanned_pdf_skipped(tmp_path, monkeypatch):
     docs = [_doc([("", [])], source="scan.pdf")]
     manifest = explain.generate_explainers(docs, tmp_path, log=lambda _msg: None)
     assert manifest == []
+
+
+def test_exam_snippets_are_matched_by_course(monkeypatch):
+    notes = _doc(
+        [("KINETIC ENERGY and momentum are central ideas", ["Mechanics"])],
+        source="sp2-notes.pdf",
+    )
+    notes.course_key = "sp2"
+    exams = [
+        _doc([("This question tests kinetic energy in moving systems", [])], source="sp2-exam.pdf"),
+        _doc([("Cell structure and osmosis", [])], source="bio1-exam.pdf"),
+    ]
+    exams[0].course_key = "sp2"
+    exams[1].course_key = "bio1"
+
+    snippets = explain._exam_snippets_for_course(exams, "sp2")
+    matched = explain._match_exam_snippets(notes.pages[0].text, snippets)
+
+    assert len(matched) == 1
+    assert "sp2-exam.pdf" in matched[0]
+
+
+def test_generate_explainers_passes_exam_snippets(tmp_path, monkeypatch):
+    monkeypatch.setenv("STUDYMATE_AI_PROVIDER", "stub")
+    notes = [_doc([("ENERGY TRANSFER IN SYSTEMS", ["Energy"])] , source="sp2-notes.pdf")]
+    notes[0].course_key = "sp2"
+    exams = [_doc([("energy transfer appears in many exam questions", [])], source="sp2-exam.pdf")]
+    exams[0].course_key = "sp2"
+
+    captured: list[list[str] | None] = []
+
+    def fake_generate_explainer(title, text, level="intermediate", exam_snippets=None):
+        captured.append(exam_snippets)
+        return "<!DOCTYPE html><html><body>ok</body></html>"
+
+    monkeypatch.setattr(llm, "generate_explainer", fake_generate_explainer)
+    explain.generate_explainers(notes, tmp_path, exam_docs=exams, log=lambda _msg: None)
+
+    assert captured
+    assert captured[0]
+    assert "sp2-exam.pdf" in captured[0][0]

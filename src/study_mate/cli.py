@@ -9,25 +9,48 @@ from pathlib import Path
 from . import explain, extract
 
 
-def _explain(materials: Path, out: Path, token_budget: int, level: str, force: bool) -> int:
-    if not materials.exists():
-        print(f"Materials folder not found: {materials}", file=sys.stderr)
+def _explain(
+    notes_dir: Path,
+    exam_papers_dir: Path,
+    out: Path,
+    token_budget: int,
+    level: str,
+    force: bool,
+) -> int:
+    if not notes_dir.exists():
+        print(f"Notes folder not found: {notes_dir}", file=sys.stderr)
+        return 1
+    if not exam_papers_dir.exists():
+        print(f"Exam papers folder not found: {exam_papers_dir}", file=sys.stderr)
         return 1
 
-    docs = extract.extract_dir(materials)
-    if not docs:
-        print(f"No PDFs found in {materials}. Add some .pdf files and retry.", file=sys.stderr)
+    notes_docs, exam_docs = extract.extract_material_sets(notes_dir, exam_papers_dir)
+    if not notes_docs:
+        print(f"No PDFs found in {notes_dir}. Add notes .pdf files and retry.", file=sys.stderr)
         return 1
 
     manifest = explain.generate_explainers(
-        docs, out, token_budget=token_budget, level=level, force=force
+        notes_docs,
+        out,
+        exam_docs=exam_docs,
+        token_budget=token_budget,
+        level=level,
+        force=force,
     )
     if not manifest:
-        print("No explainers generated (no extractable text in any PDF).", file=sys.stderr)
+        print("No explainers generated (no extractable text in notes PDFs).", file=sys.stderr)
+        print(
+            "Hint: for scanned/image PDFs, install Tesseract OCR and retry. "
+            "On macOS: `brew install tesseract`.",
+            file=sys.stderr,
+        )
         return 1
 
     index_path = out / "explainers" / "index.html"
-    print(f"Generated {len(manifest)} explainer(s) from {len(docs)} PDF(s).")
+    print(
+        f"Generated {len(manifest)} exam-oriented explainer section(s) "
+        f"from {len(notes_docs)} notes PDF(s) and {len(exam_docs)} exam PDF(s)."
+    )
     print(f"Open: {index_path}")
     print("Or run: uv run study-mate serve  (then visit /explainers/)")
     return 0
@@ -59,9 +82,12 @@ def main(argv: list[str] | None = None) -> int:
     root = Path.cwd()
 
     p_explain = sub.add_parser(
-        "explain", help="Step 1: PDFs in materials/ -> AI HTML explainers"
+        "explain", help="Step 1: notes + exam papers -> AI HTML exam-oriented explainers"
     )
-    p_explain.add_argument("--materials", type=Path, default=root / "materials")
+    p_explain.add_argument("--notes", type=Path, default=root / "materials" / "notes")
+    p_explain.add_argument(
+        "--exam-papers", type=Path, default=root / "materials" / "exam_papers"
+    )
     p_explain.add_argument("--out", type=Path, default=root / "generated")
     p_explain.add_argument(
         "--token-budget",
@@ -84,7 +110,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "explain":
-        return _explain(args.materials, args.out, args.token_budget, args.level, args.force)
+        return _explain(
+            args.notes,
+            args.exam_papers,
+            args.out,
+            args.token_budget,
+            args.level,
+            args.force,
+        )
     if args.command == "serve":
         return _serve(args.out, args.host, args.port)
     parser.print_help()

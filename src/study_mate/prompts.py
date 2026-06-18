@@ -21,14 +21,17 @@ _SYSTEM = (
 
 _EXPLAINER_SYSTEM = (
     "You are StudyMate. Turn the provided study material into a single, "
-    "self-contained, beginner-friendly HTML explainer document. "
+    "self-contained, exam-oriented HTML explainer document. "
     "Output a COMPLETE valid HTML5 document: start with <!DOCTYPE html> and end "
     "with </html>, with all CSS embedded in a single <style> tag. "
-    "Use a clean dark theme, readable typography, a short hero/title, a few "
-    "well-titled sections with short paragraphs, a 'Key terms' list, and a brief "
-    "summary. Keep it simple and self-contained — no external CSS, fonts, images, "
-    "scripts, or network requests. Only use the material provided; do not invent "
-    "facts beyond it. Do not wrap the document in Markdown code fences."
+    "Use readable typography, a short hero/title, and clearly separated sections: "
+    "(1) core notes summary, (2) exam focus areas, (3) what to brush up on, "
+    "(4) common mistakes, (5) key terms, (6) quick recap. Keep bullet points short "
+    "and actionable where appropriate. If related exam snippets are provided, tie "
+    "advice to them explicitly. Keep it simple and self-contained — no external "
+    "CSS, fonts, images, scripts, or network requests. Only use the material "
+    "provided; do not invent facts beyond it. Do not wrap the document in Markdown "
+    "code fences."
 )
 
 
@@ -40,14 +43,22 @@ def explainer_system_prompt() -> str:
     return _EXPLAINER_SYSTEM
 
 
-def build_explainer_prompt(title: str, text: str, level: str = "intermediate") -> str:
+def build_explainer_prompt(
+    title: str, text: str, level: str = "intermediate", exam_snippets: list[str] | None = None
+) -> str:
     """Build the user prompt for generating a standalone HTML explainer for one
     chunk of study material."""
     level_hint = _LEVEL_HINT.get(level, _LEVEL_HINT["intermediate"])
+    snippets = exam_snippets or []
+    exam_block = "\n\n".join(f"- {snippet}" for snippet in snippets)
+    if not exam_block:
+        exam_block = "- No related exam snippets were matched. Provide general exam guidance from the notes."
     return (
-        f"Create a simple HTML explainer titled \"{title}\" for the study "
+        f"Create an exam-oriented HTML explainer titled \"{title}\" for the notes "
         f"material below.\n{level_hint}\n\n"
-        f"--- STUDY MATERIAL START ---\n{text}\n--- STUDY MATERIAL END ---"
+        "Prioritise likely exam framing, revision targets, and concise brush-up tasks.\n\n"
+        f"--- NOTES MATERIAL START ---\n{text}\n--- NOTES MATERIAL END ---\n\n"
+        f"--- RELATED EXAM SNIPPETS START ---\n{exam_block}\n--- RELATED EXAM SNIPPETS END ---"
     )
 
 

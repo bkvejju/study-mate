@@ -1,7 +1,7 @@
 # StudyMate
 
 Turn your study PDFs into clean, AI-written HTML explainers you can read in the
-browser — with a side panel to ask questions, get summaries, quizzes, and
+browser - with a side panel to ask questions, get summaries, quizzes, and
 flashcards.
 
 ## How to use it
@@ -12,7 +12,13 @@ flashcards.
    uv sync
    ```
 
-2. **Add your PDFs** to the `materials/` folder.
+2. **Add your PDFs** to these folders:
+
+   - `materials/notes/` for lecture/class notes
+   - `materials/exam_papers/` for past papers
+
+   Only these two folders are used by `study-mate explain`.
+   PDFs directly in `materials/` are ignored.
 
 3. **Generate the explainers** (this is the AI step):
 
@@ -20,9 +26,11 @@ flashcards.
    uv run study-mate explain
    ```
 
-   Each PDF is read, split into budget-sized chunks, and turned into a
-   standalone HTML explainer in `generated/explainers/`. Re-running skips files
-   that already exist — add `--force` to regenerate.
+   Notes are split into section-sized chunks, and each section is paired with
+   related exam-paper snippets (matched by course key + keyword overlap).
+   StudyMate then generates exam-oriented HTML explainers in
+   `generated/explainers/` with focused revision guidance and brush-up lists.
+   Re-running skips files that already exist - add `--force` to regenerate.
 
 4. **Open the app**
 
@@ -76,8 +84,11 @@ Real shell `export`s always win over `.env`.
 ## Useful options
 
 ```bash
-# Smaller chunks = more, shorter explainers (one per chunk)
+# Smaller chunks = more, shorter section explainers
 uv run study-mate explain --token-budget 1500
+
+# Custom input folders
+uv run study-mate explain --notes materials/notes --exam-papers materials/exam_papers
 
 # Regenerate everything
 uv run study-mate explain --force
@@ -96,6 +107,42 @@ proxies. If certificate verification still fails, point at your CA bundle:
 
 ```bash
 STUDYMATE_CA_BUNDLE=/path/to/corp-ca.pem
+```
+
+## Privacy and copyright filtering
+
+StudyMate strips common non-study boilerplate from extracted text before
+chunking and before sending material to the LLM. This includes lines such as:
+
+- `Printed by: ...`
+- `Printing is for personal, private use only ...`
+- `No part of this book may ...`
+- `Violators will be prosecuted.`
+
+This helps keep prompts focused on actual learning content only.
+
+## Scanned PDFs (OCR)
+
+If a PDF is image-only (no selectable text), StudyMate tries OCR before
+sending text to the LLM.
+
+Install Tesseract first:
+
+```bash
+brew install tesseract
+```
+
+Optional OCR settings:
+
+```bash
+# default: true
+STUDYMATE_ENABLE_OCR=true
+
+# default: eng
+STUDYMATE_OCR_LANG=eng
+
+# default: 300
+STUDYMATE_OCR_DPI=300
 ```
 
 ## Token reduction (optional)

@@ -11,7 +11,7 @@ __pycache__/
 
 # StudyMate
 generated/
-materials/*
+materials/
 !materials/.gitkeep
 
 # Env

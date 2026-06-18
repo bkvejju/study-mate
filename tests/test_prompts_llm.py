@@ -35,3 +35,14 @@ def test_provider_default_is_stub(monkeypatch):
     monkeypatch.delenv("STUDYMATE_AI_PROVIDER", raising=False)
     assert llm.provider() == "stub"
     assert os.environ.get("STUDYMATE_AI_PROVIDER") is None
+
+
+def test_explainer_prompt_includes_exam_snippets():
+    out = prompts.build_explainer_prompt(
+        "Mechanics",
+        "Force equals mass times acceleration",
+        level="intermediate",
+        exam_snippets=["sp2-exam.pdf p.2: force and momentum"],
+    )
+    assert "RELATED EXAM SNIPPETS START" in out
+    assert "sp2-exam.pdf p.2" in out

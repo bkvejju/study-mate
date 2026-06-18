@@ -182,7 +182,12 @@ def _stub_explainer(title: str, text: str) -> str:
     )
 
 
-def generate_explainer(title: str, text: str, level: str = "intermediate") -> str:
+def generate_explainer(
+    title: str,
+    text: str,
+    level: str = "intermediate",
+    exam_snippets: list[str] | None = None,
+) -> str:
     """Generate a complete standalone HTML explainer document for one chunk of
     study material (the initial token-heavy generation step)."""
     cfg = config.ai_config("explainer")
@@ -190,7 +195,7 @@ def generate_explainer(title: str, text: str, level: str = "intermediate") -> st
         return _stub_explainer(title, text)
 
     system = prompts.explainer_system_prompt()
-    user = prompts.build_explainer_prompt(title, text, level)
+    user = prompts.build_explainer_prompt(title, text, level, exam_snippets=exam_snippets)
     if cfg.provider == "openai":
         content = _call_openai(
             system, user, cfg.model or _OPENAI_DEFAULT_MODEL, cfg.api_key, _EXPLAINER_MAX_OUTPUT_TOKENS
