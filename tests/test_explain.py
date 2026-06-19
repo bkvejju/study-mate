@@ -32,6 +32,15 @@ def test_chunk_uses_heading_as_title_and_tracks_pages():
     assert chunks[0].page_range == "pp.1-2"
 
 
+def test_chunk_ignores_copyright_heading_and_falls_back_title():
+    bad = "be reproduced or transmitted without publisher's prior permission. Violators will be prosecuted."
+    doc = _doc([("body", [bad])], source="sp2.pdf")
+    chunks = explain.chunk_document(doc, token_budget=4000)
+
+    assert len(chunks) == 1
+    assert chunks[0].title == "sp2.pdf — Part 1"
+
+
 def test_stub_explainer_is_full_html_document(monkeypatch):
     monkeypatch.setenv("STUDYMATE_AI_PROVIDER", "stub")
     out = llm.generate_explainer("Photosynthesis", "light to energy")
@@ -50,6 +59,26 @@ def test_generate_explainers_writes_files_and_index(tmp_path, monkeypatch):
     assert (explainers_dir / manifest[0].file).exists()
     assert (explainers_dir / "index.html").exists()
     assert (explainers_dir / "manifest.json").exists()
+
+
+def test_generate_explainers_chapter_strategy_writes_chapter_files(tmp_path, monkeypatch):
+    monkeypatch.setenv("STUDYMATE_AI_PROVIDER", "stub")
+    docs = [
+        _doc(
+            [
+                ("intro", ["Part 1 Overview"]),
+                ("pricing", ["Chapter 2 Pricing"]),
+            ],
+            source="a.pdf",
+        )
+    ]
+
+    manifest = explain.generate_explainers(docs, tmp_path, strategy="chapters", log=lambda _msg: None)
+
+    assert len(manifest) == 2
+    assert manifest[0].file == "a-chapter-01.html"
+    assert manifest[1].file == "a-chapter-02.html"
+    assert (tmp_path / "markdown" / "a-note.md").exists()
 
 
 def test_existing_files_skipped_without_force(tmp_path, monkeypatch):

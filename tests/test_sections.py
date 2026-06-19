@@ -1,6 +1,7 @@
 """Tests for the text-splitting utilities used by the explainer chunker."""
 
-from study_mate.sections import _split_oversized
+from study_mate.extract import DocumentText, PageText
+from study_mate.sections import _split_oversized, split_document_into_chapters
 
 
 def test_short_text_is_unchanged():
@@ -26,4 +27,36 @@ def test_returns_all_content():
     joined = " ".join(chunks)
     for word in ("alpha", "beta", "gamma"):
         assert word in joined
+
+
+def test_split_document_into_chapters_by_heading_boundaries():
+    doc = DocumentText(
+        source="sp2.pdf",
+        pages=[
+            PageText(page_number=1, text="intro text", headings=["Part 1 Overview"]),
+            PageText(page_number=2, text="still part 1", headings=[]),
+            PageText(page_number=3, text="chapter 2 text", headings=["Chapter 2 Pricing"]),
+        ],
+    )
+    chapters = split_document_into_chapters(doc)
+
+    assert len(chapters) == 2
+    assert chapters[0].title == "Part 1 Overview"
+    assert chapters[0].page_range == "pp.1-2"
+    assert chapters[1].title == "Chapter 2 Pricing"
+    assert chapters[1].page_range == "p.3"
+
+
+def test_split_document_into_chapters_fallback_title_when_no_heading():
+    doc = DocumentText(
+        source="sp2.pdf",
+        pages=[
+            PageText(page_number=1, text="alpha", headings=[]),
+            PageText(page_number=2, text="beta", headings=[]),
+        ],
+    )
+    chapters = split_document_into_chapters(doc)
+
+    assert len(chapters) == 1
+    assert chapters[0].title == "sp2.pdf - Chapter 1"
 

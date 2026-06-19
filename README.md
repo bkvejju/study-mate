@@ -26,13 +26,28 @@ flashcards.
    uv run study-mate explain
    ```
 
-   Notes are split into section-sized chunks, and each section is paired with
-   related exam-paper snippets (matched by course key + keyword overlap).
-   StudyMate then generates exam-oriented HTML explainers in
-   `generated/explainers/` with focused revision guidance and brush-up lists.
-   Re-running skips files that already exist - add `--force` to regenerate.
+    StudyMate now uses a **chapter-first strategy** by default.
 
-4. **Open the app**
+    - Notes are segmented into chapter-like units (using heading boundaries).
+    - Each chapter is paired with related exam-paper snippets (course key +
+       keyword overlap).
+    - One exam-oriented HTML explainer is generated per chapter in
+       `generated/explainers/`.
+    - A deterministic extraction artifact is also written to
+       `generated/markdown/` so extraction and prompting stay decoupled.
+
+    Re-running skips files that already exist - add `--force` to regenerate.
+
+4. **(Optional) Export markdown only** (no AI call):
+
+    ```bash
+    uv run study-mate extract-markdown
+    ```
+
+    This exports normalized markdown for notes and exam papers into
+    `generated/markdown/`.
+
+5. **Open the app**
 
    ```bash
    uv run study-mate serve
@@ -84,14 +99,26 @@ Real shell `export`s always win over `.env`.
 ## Useful options
 
 ```bash
-# Smaller chunks = more, shorter section explainers
-uv run study-mate explain --token-budget 1500
+# Chapter-first (default)
+uv run study-mate explain --strategy chapters
+
+# Legacy token chunking mode (old behavior)
+uv run study-mate explain --strategy sections
+
+# Token budget only affects section strategy
+uv run study-mate explain --strategy sections --token-budget 1500
+
+# Set default token budget via env (.env supported)
+STUDYMATE_TOKEN_BUDGET=6000
 
 # Custom input folders
 uv run study-mate explain --notes materials/notes --exam-papers materials/exam_papers
 
 # Regenerate everything
 uv run study-mate explain --force
+
+# Markdown export only (deterministic extraction stage)
+uv run study-mate extract-markdown
 
 # Reading level for the AI output
 uv run study-mate explain --level beginner   # or intermediate / advanced
@@ -120,6 +147,21 @@ chunking and before sending material to the LLM. This includes lines such as:
 - `Violators will be prosecuted.`
 
 This helps keep prompts focused on actual learning content only.
+
+## Output structure
+
+After generation, StudyMate writes:
+
+- `generated/explainers/*.html`: chapter explainers (or section explainers in
+   legacy `--strategy sections` mode)
+- `generated/explainers/manifest.json`: navigation metadata
+- `generated/explainers/index.html`: explainer index page
+- `generated/markdown/*.md`: deterministic markdown extraction artifacts
+
+Markdown filenames include source kind suffixes to avoid collisions:
+
+- `*-note.md`
+- `*-exam.md`
 
 ## Scanned PDFs (OCR)
 

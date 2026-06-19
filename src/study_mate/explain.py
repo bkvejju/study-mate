@@ -15,15 +15,25 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from . import compress, llm, render
+from . import compress, llm, markdown_export, render
 from .extract import DocumentText
-from .sections import _split_oversized
+from .sections import _split_oversized, split_document_into_chapters
 
 # Rough heuristic: ~4 characters per token for English prose.
 APPROX_CHARS_PER_TOKEN = 4
 # Default input-token budget per AI call (the "headroom"). Keeping each request
 # small bounds token usage and makes cost predictable.
 DEFAULT_TOKEN_BUDGET = 4000
+DEFAULT_STRATEGY = "chapters"
+
+_NON_TITLE_PATTERNS = (
+    re.compile(r"printed by", re.IGNORECASE),
+    re.compile(r"private use", re.IGNORECASE),
+    re.compile(r"no part of this book", re.IGNORECASE),
+    re.compile(r"be reproduced or transmitted", re.IGNORECASE),
+    re.compile(r"prior permission", re.IGNORECASE),
+    re.compile(r"violators will be prosecuted", re.IGNORECASE),
+)
 
 
 @dataclass
@@ -75,6 +85,25 @@ def _slug(text: str) -> str:
 
 def _normalise_spaces(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _is_title_candidate(text: str) -> bool:
+    candidate = _normalise_spaces(text)
+    if not candidate:
+        return False
+    if any(pattern.search(candidate) for pattern in _NON_TITLE_PATTERNS):
+        return False
+    # Keep titles compact and heading-like.
+    if len(candidate) > 140 or len(candidate.split()) > 20:
+        return False
+    return True
+
+
+def _pick_title(headings: list[str]) -> str | None:
+    for heading in headings:
+        if _is_title_candidate(heading):
+            return _normalise_spaces(heading)
+    return None
 
 
 def _keyword_set(text: str) -> set[str]:
@@ -203,7 +232,7 @@ def chunk_document(doc: DocumentText, token_budget: int = DEFAULT_TOKEN_BUDGET) 
                 flush()
             if start_page is None:
                 start_page = page.page_number
-                title = page.headings[0] if page.headings else None
+                title = _pick_title(page.headings)
             end_page = page.page_number
             buf.append(piece)
             buf_chars += len(piece)
@@ -217,6 +246,7 @@ def generate_explainers(
     exam_docs: list[DocumentText] | None = None,
     token_budget: int = DEFAULT_TOKEN_BUDGET,
     level: str = "intermediate",
+    strategy: str = DEFAULT_STRATEGY,
     force: bool = False,
     log: Callable[[str], None] = print,
 ) -> list[Explainer]:
@@ -243,18 +273,40 @@ def generate_explainers(
     total_received_tokens = 0
     generated_count = 0
 
+    if strategy not in {"sections", "chapters"}:
+        raise ValueError("strategy must be one of: sections, chapters")
+
+    # Deterministic extraction artifact for inspection/debugging, regardless of strategy.
+    markdown_export.export_markdown_documents(notes_docs, out_dir)
+
     manifest: list[Explainer] = []
     for doc in notes_docs:
         if not doc.has_text:
             log(f"  ! {doc.source}: no extractable text (scanned PDF?). Skipped.")
             continue
 
-        chunks = chunk_document(doc, token_budget)
+        if strategy == "chapters":
+            chapter_units = split_document_into_chapters(doc)
+            chunks = [
+                Chunk(
+                    source=doc.source,
+                    index=chapter.index,
+                    title=chapter.title,
+                    page_start=chapter.page_start,
+                    page_end=chapter.page_end,
+                    text=chapter.text,
+                )
+                for chapter in chapter_units
+            ]
+        else:
+            chunks = chunk_document(doc, token_budget)
+
         course_key = doc.course_key or _slug(Path(doc.source).stem)
         course_exam_snippets = _exam_snippets_for_course(exam_docs, course_key)
         base = _slug(Path(doc.source).stem)
         for chunk in chunks:
-            name = f"{base}-section-{chunk.index:02d}.html" if len(chunks) > 1 else f"{base}.html"
+            unit_name = "chapter" if strategy == "chapters" else "section"
+            name = f"{base}-{unit_name}-{chunk.index:02d}.html" if len(chunks) > 1 else f"{base}.html"
             path = explainers_dir / name
             entry = Explainer(
                 source=doc.source,
@@ -312,7 +364,7 @@ def generate_explainers(
     render.render_explainer_index(manifest, explainers_dir)
 
     log(
-        f"Summary: {generated_count} explainer(s) generated from "
+        f"Summary: {generated_count} explainer(s) generated with strategy={strategy} from "
         f"{notes_with_text}/{len(notes_docs)} note PDF(s) | "
         f"~{total_words:,} words (~{total_source_tokens:,} source tokens) | "
         f"~{total_sent_tokens:,} tokens sent to LLM | "

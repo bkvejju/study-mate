@@ -46,3 +46,25 @@ def test_explainer_prompt_includes_exam_snippets():
     )
     assert "RELATED EXAM SNIPPETS START" in out
     assert "sp2-exam.pdf p.2" in out
+
+
+def test_explainer_system_prompt_defines_fixed_pattern():
+    system = prompts.explainer_system_prompt()
+    assert "#core-notes" in system
+    assert "#exam-focus" in system
+    assert "#brush-up" in system
+    assert "#common-mistakes" in system
+    assert "#key-terms" in system
+    assert "#quick-recap" in system
+    assert "No inline styles, no tables" in system
+
+
+def test_explainer_style_is_normalized():
+    raw = (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        "<style>body{background:red}</style></head>"
+        "<body><main class='page'></main></body></html>"
+    )
+    out = llm._normalise_explainer_style(raw)
+    assert "background:red" not in out
+    assert "--bg: #f9f7f4;" in out

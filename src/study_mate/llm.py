@@ -14,6 +14,7 @@ from __future__ import annotations
 import functools
 import html
 import os
+import re
 import ssl
 import textwrap
 
@@ -31,6 +32,129 @@ _MAX_OUTPUT_TOKENS = 700
 # the document is never truncated mid-sentence. Override via STUDYMATE_EXPLAINER_
 # MAX_OUTPUT_TOKENS if needed.
 _EXPLAINER_MAX_OUTPUT_TOKENS = int(os.environ.get("STUDYMATE_EXPLAINER_MAX_OUTPUT_TOKENS", "8000"))
+
+_EXPLAINER_CANONICAL_CSS = """
+:root {
+    --bg: #f9f7f4;
+    --surface: #ffffff;
+    --text: #24201c;
+    --muted: #6a6258;
+    --accent: #b65a3b;
+    --accent-2: #2f6fa8;
+    --border: #e2dbd3;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    line-height: 1.6;
+}
+
+main.page {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 24px 16px 44px;
+}
+
+header.hero {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #ffffff;
+    border-radius: 14px;
+    padding: 22px 20px;
+    margin-bottom: 18px;
+}
+
+header.hero h1 {
+    margin: 0 0 8px;
+    font-size: 1.7rem;
+}
+
+header.hero p.lead {
+    margin: 0;
+    font-size: 1rem;
+    opacity: 0.95;
+}
+
+section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+    margin-bottom: 14px;
+}
+
+section h2 {
+    margin: 0 0 10px;
+    color: var(--accent);
+    font-size: 1.2rem;
+    border-bottom: 2px solid var(--accent-2);
+    padding-bottom: 6px;
+}
+
+h3 {
+    margin: 14px 0 6px;
+    color: var(--text);
+    font-size: 1rem;
+}
+
+p {
+    margin: 0 0 10px;
+}
+
+ul,
+ol,
+dl {
+    margin: 0 0 12px 20px;
+}
+
+li {
+    margin-bottom: 6px;
+}
+
+dl.key-terms-list {
+    margin-left: 0;
+}
+
+dl.key-terms-list dt {
+    font-weight: 700;
+    color: var(--accent);
+    margin-top: 10px;
+}
+
+dl.key-terms-list dd {
+    margin: 4px 0 0 0;
+    color: var(--text);
+}
+
+ul.recap-list {
+    margin-left: 18px;
+}
+
+@media (max-width: 720px) {
+    main.page {
+        padding: 14px 10px 24px;
+    }
+
+    header.hero h1 {
+        font-size: 1.35rem;
+    }
+
+    section {
+        padding: 14px;
+    }
+}
+""".strip()
 
 
 @functools.lru_cache(maxsize=1)
@@ -77,6 +201,22 @@ def _strip_code_fences(content: str) -> str:
         if stripped.rstrip().endswith("```"):
             stripped = stripped.rstrip()[: -len("```")]
     return stripped.strip()
+
+
+def _normalise_explainer_style(content: str) -> str:
+    """Force one shared stylesheet so every generated explainer looks consistent."""
+    style_block = f"<style>\n{_EXPLAINER_CANONICAL_CSS}\n</style>"
+    if re.search(r"<style\b[^>]*>.*?</style>", content, flags=re.IGNORECASE | re.DOTALL):
+        return re.sub(
+            r"<style\b[^>]*>.*?</style>",
+            style_block,
+            content,
+            count=1,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    if re.search(r"</head>", content, flags=re.IGNORECASE):
+        return re.sub(r"</head>", f"{style_block}\n</head>", content, count=1, flags=re.IGNORECASE)
+    return content
 
 
 def _stub_response(action: str, text: str) -> str:
@@ -210,4 +350,4 @@ def generate_explainer(
         )
     else:
         return _stub_explainer(title, text)
-    return _strip_code_fences(content)
+    return _normalise_explainer_style(_strip_code_fences(content))

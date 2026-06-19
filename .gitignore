@@ -10,9 +10,22 @@ __pycache__/
 .DS_Store
 
 # StudyMate
-generated/
-materials/
+generated/*
+!generated/explainers/
+generated/explainers/*
+!generated/explainers/.gitkeep
+!generated/markdown/
+generated/markdown/*
+!generated/markdown/.gitkeep
+
+materials/*
 !materials/.gitkeep
+!materials/exam_papers/
+materials/exam_papers/*
+!materials/exam_papers/.gitkeep
+!materials/notes/
+materials/notes/*
+!materials/notes/.gitkeep
 
 # Env
 .env
