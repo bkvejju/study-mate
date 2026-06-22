@@ -21,6 +21,26 @@ def _default_token_budget() -> int:
     return value if value > 0 else explain.DEFAULT_TOKEN_BUDGET
 
 
+def _explain_from_markdown(markdown_dir: Path, out: Path, level: str, force: bool) -> int:
+    if not markdown_dir.exists():
+        print(f"Markdown folder not found: {markdown_dir}", file=sys.stderr)
+        print("Hint: run `uv run study-mate extract-markdown` first.", file=sys.stderr)
+        return 1
+
+    manifest = explain.generate_explainers_from_markdown(
+        markdown_dir, out, level=level, force=force
+    )
+    if not manifest:
+        print(f"No explainers generated (no chapters found in {markdown_dir}).", file=sys.stderr)
+        return 1
+
+    index_path = out / "explainers" / "index.html"
+    print(f"Generated {len(manifest)} exam-oriented explainer file(s) from markdown in {markdown_dir}.")
+    print(f"Open: {index_path}")
+    print("Or run: uv run study-mate serve  (then visit /explainers/)")
+    return 0
+
+
 def _explain(
     notes_dir: Path,
     exam_papers_dir: Path,
@@ -144,6 +164,20 @@ def main(argv: list[str] | None = None) -> int:
     p_explain.add_argument(
         "--force", action="store_true", help="Regenerate explainers that already exist."
     )
+    p_explain.add_argument(
+        "--from-markdown",
+        action="store_true",
+        help=(
+            "Skip PDF re-extraction and generate explainers directly from "
+            "generated/markdown/*.md (chapter strategy only)."
+        ),
+    )
+    p_explain.add_argument(
+        "--markdown-dir",
+        type=Path,
+        default=None,
+        help="Markdown source dir when using --from-markdown (default: <out>/markdown).",
+    )
 
     p_extract_markdown = sub.add_parser(
         "extract-markdown", help="Step 0: notes + exam papers -> deterministic markdown artifacts"
@@ -162,6 +196,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "explain":
+        if args.from_markdown:
+            markdown_dir = args.markdown_dir or (args.out / "markdown")
+            return _explain_from_markdown(markdown_dir, args.out, args.level, args.force)
         return _explain(
             args.notes,
             args.exam_papers,

@@ -38,6 +38,21 @@ flashcards.
 
     Re-running skips files that already exist - add `--force` to regenerate.
 
+    To regenerate explainers without re-parsing the source PDFs (e.g. after
+    tweaking the AI provider or model), run from the markdown artifact
+    instead:
+
+    ```bash
+    uv run study-mate explain --from-markdown --force
+    ```
+
+    This reads `generated/markdown/*.md` (override with `--markdown-dir`)
+    instead of `materials/`, so it's much faster and makes no PDF/OCR calls.
+    It always behaves like `--strategy chapters`, since per-page granularity
+    isn't preserved once exported to markdown. Exam-snippet matching works
+    too, as long as exam markdown (`*-exam.md`) was also exported — either by
+    a previous `study-mate explain` run or by `study-mate extract-markdown`.
+
 4. **(Optional) Export markdown only** (no AI call):
 
     ```bash
@@ -119,6 +134,13 @@ uv run study-mate explain --force
 
 # Markdown export only (deterministic extraction stage)
 uv run study-mate extract-markdown
+
+# Generate explainers from already-exported markdown, skipping PDF
+# re-extraction entirely (chapter strategy only)
+uv run study-mate explain --from-markdown
+
+# ...from a different markdown folder
+uv run study-mate explain --from-markdown --markdown-dir path/to/markdown
 
 # Reading level for the AI output
 uv run study-mate explain --level beginner   # or intermediate / advanced

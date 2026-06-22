@@ -30,6 +30,30 @@ def _doc(source: str, kind: str) -> DocumentText:
     )
 
 
+def test_explain_from_markdown_generates_when_markdown_exists(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("STUDYMATE_AI_PROVIDER", "stub")
+    docs = [_doc("a.pdf", "note")]
+    explain.generate_explainers(docs, tmp_path, strategy="chapters", log=lambda _msg: None)
+
+    exit_code = cli.main(
+        [
+            "explain",
+            "--out",
+            str(tmp_path),
+            "--from-markdown",
+            "--force",
+        ]
+    )
+
+    assert exit_code == 0
+
+
+def test_explain_from_markdown_missing_dir_errors(tmp_path: Path, capsys):
+    exit_code = cli.main(["explain", "--out", str(tmp_path), "--from-markdown"])
+    assert exit_code == 1
+    assert "Markdown folder not found" in capsys.readouterr().err
+
+
 def test_extract_markdown_writes_files(tmp_path: Path, monkeypatch):
     notes_dir = tmp_path / "notes"
     exams_dir = tmp_path / "exam_papers"

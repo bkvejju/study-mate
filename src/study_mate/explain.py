@@ -74,6 +74,17 @@ class ExamSnippet:
     text: str
 
 
+@dataclass
+class _UnitStats:
+    """Outcome of generating (or skipping) one explainer unit."""
+
+    words: int = 0
+    source_tokens: int = 0
+    sent_tokens: int = 0
+    received_tokens: int = 0
+    generated: bool = False
+
+
 def estimate_tokens(text: str) -> int:
     """Rough input-token estimate for a piece of text."""
     return max(1, len(text) // APPROX_CHARS_PER_TOKEN)
@@ -167,6 +178,29 @@ def _exam_snippets_for_course(docs: list[DocumentText], course_key: str) -> list
     return snippets
 
 
+def _exam_snippets_from_markdown(
+    docs: list[markdown_export.ParsedMarkdownDocument], course_key: str
+) -> list[ExamSnippet]:
+    """Like :func:`_exam_snippets_for_course`, but over markdown-derived exam
+    chapters (chapter-level granularity, since per-page text isn't preserved
+    once exported to markdown)."""
+    snippets: list[ExamSnippet] = []
+    for doc in docs:
+        if doc.course_key != course_key:
+            continue
+        for chapter in doc.chapters:
+            if not chapter.text.strip():
+                continue
+            snippets.append(
+                ExamSnippet(
+                    source=doc.source,
+                    page_number=chapter.page_start,
+                    text=_normalise_spaces(chapter.text),
+                )
+            )
+    return snippets
+
+
 def _match_exam_snippets(section_text: str, snippets: list[ExamSnippet], limit: int = 3) -> list[str]:
     """Pick the most relevant exam snippets for a notes section via keyword overlap."""
     section_words = _keyword_set(section_text)
@@ -240,6 +274,145 @@ def chunk_document(doc: DocumentText, token_budget: int = DEFAULT_TOKEN_BUDGET) 
     return chunks
 
 
+def _generate_explainer_unit(
+    chunk: Chunk,
+    name: str,
+    explainers_dir: Path,
+    level: str,
+    force: bool,
+    log: Callable[[str], None],
+    course_exam_snippets: list[ExamSnippet],
+) -> tuple[Explainer, _UnitStats]:
+    """Generate (or skip, if already on disk) one explainer file for ``chunk``.
+
+    Shared by both the PDF-driven and markdown-driven entry points.
+    """
+    path = explainers_dir / name
+    entry = Explainer(
+        source=chunk.source,
+        title=chunk.title,
+        page_range=chunk.page_range,
+        file=name,
+        text=chunk.text,
+    )
+
+    if path.exists() and not force:
+        log(f"  = {name}: exists, skipped (use --force to regenerate)")
+        return entry, _UnitStats()
+
+    words = len(chunk.text.split())
+    source_tokens = estimate_tokens(chunk.text)
+    log(f"  + {name}: generating ({words} words, ~{source_tokens} input tokens)...")
+    comp = compress.compress_text(chunk.text, role="explainer")
+    if comp.applied:
+        log(
+            f"    headroom: {comp.tokens_before}->{comp.tokens_after} tokens "
+            f"({comp.savings_percent:.0f}% saved)"
+        )
+    sent_tokens = estimate_tokens(comp.text)
+
+    matched_exam = _match_exam_snippets(chunk.text, course_exam_snippets)
+    if matched_exam:
+        log(f"    matched {len(matched_exam)} related exam snippet(s)")
+    else:
+        log("    no strong exam match found; using notes-only exam guidance")
+
+    doc_html = llm.generate_explainer(chunk.title, comp.text, level, exam_snippets=matched_exam)
+    received_tokens = estimate_tokens(doc_html)
+    log(f"    ~{sent_tokens} tokens sent to LLM -> ~{received_tokens} tokens received")
+    path.write_text(doc_html, encoding="utf-8")
+
+    return entry, _UnitStats(
+        words=words,
+        source_tokens=source_tokens,
+        sent_tokens=sent_tokens,
+        received_tokens=received_tokens,
+        generated=True,
+    )
+
+
+def _write_manifest_and_index(manifest: list[Explainer], explainers_dir: Path) -> None:
+    (explainers_dir / "manifest.json").write_text(
+        json.dumps(
+            [{k: v for k, v in asdict(e).items() if k != "text"} for e in manifest],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    render.render_explainer_index(manifest, explainers_dir)
+
+
+def generate_explainers_from_markdown(
+    markdown_dir: Path,
+    out_dir: Path,
+    level: str = "intermediate",
+    force: bool = False,
+    log: Callable[[str], None] = print,
+) -> list[Explainer]:
+    """Generate explainers directly from previously-exported markdown
+    (``study-mate extract-markdown``), skipping PDF re-extraction entirely.
+
+    Markdown only preserves chapter-level granularity (see
+    :func:`markdown_export.parse_markdown_document`), so this always behaves
+    like ``--strategy chapters``.
+    """
+    explainers_dir = out_dir / "explainers"
+    explainers_dir.mkdir(parents=True, exist_ok=True)
+
+    note_docs = markdown_export.load_markdown_documents(markdown_dir, kind="note")
+    exam_docs = markdown_export.load_markdown_documents(markdown_dir, kind="exam")
+    log(
+        f"Loaded {len(note_docs)} notes markdown doc(s) and {len(exam_docs)} exam markdown doc(s) "
+        f"from {markdown_dir}"
+    )
+
+    manifest: list[Explainer] = []
+    total_words = total_source_tokens = total_sent_tokens = total_received_tokens = 0
+    generated_count = 0
+
+    for doc in note_docs:
+        if not doc.chapters:
+            log(f"  ! {doc.source}: no chapters found in markdown. Skipped.")
+            continue
+
+        course_key = doc.course_key or _slug(Path(doc.source).stem)
+        course_exam_snippets = _exam_snippets_from_markdown(exam_docs, course_key)
+        base = _slug(Path(doc.source).stem)
+
+        chunks = [
+            Chunk(
+                source=doc.source,
+                index=chapter.index,
+                title=chapter.title,
+                page_start=chapter.page_start,
+                page_end=chapter.page_end,
+                text=chapter.text,
+            )
+            for chapter in doc.chapters
+        ]
+        for chunk in chunks:
+            name = f"{base}-chapter-{chunk.index:02d}.html" if len(chunks) > 1 else f"{base}.html"
+            entry, stats = _generate_explainer_unit(
+                chunk, name, explainers_dir, level, force, log, course_exam_snippets
+            )
+            manifest.append(entry)
+            if stats.generated:
+                total_words += stats.words
+                total_source_tokens += stats.source_tokens
+                total_sent_tokens += stats.sent_tokens
+                total_received_tokens += stats.received_tokens
+                generated_count += 1
+
+    _write_manifest_and_index(manifest, explainers_dir)
+
+    log(
+        f"Summary: {generated_count} explainer(s) generated from markdown | "
+        f"{len(note_docs)} note doc(s) | ~{total_words:,} words (~{total_source_tokens:,} source tokens) | "
+        f"~{total_sent_tokens:,} tokens sent to LLM | ~{total_received_tokens:,} tokens received"
+    )
+    return manifest
+
+
 def generate_explainers(
     notes_docs: list[DocumentText],
     out_dir: Path,
@@ -276,8 +449,11 @@ def generate_explainers(
     if strategy not in {"sections", "chapters"}:
         raise ValueError("strategy must be one of: sections, chapters")
 
-    # Deterministic extraction artifact for inspection/debugging, regardless of strategy.
+    # Deterministic extraction artifact for inspection/debugging, regardless of
+    # strategy. Both kinds are exported so --from-markdown can later regenerate
+    # explainers (including exam-snippet matching) without re-reading the PDFs.
     markdown_export.export_markdown_documents(notes_docs, out_dir)
+    markdown_export.export_markdown_documents(exam_docs, out_dir)
 
     manifest: list[Explainer] = []
     for doc in notes_docs:
@@ -307,61 +483,18 @@ def generate_explainers(
         for chunk in chunks:
             unit_name = "chapter" if strategy == "chapters" else "section"
             name = f"{base}-{unit_name}-{chunk.index:02d}.html" if len(chunks) > 1 else f"{base}.html"
-            path = explainers_dir / name
-            entry = Explainer(
-                source=doc.source,
-                title=chunk.title,
-                page_range=chunk.page_range,
-                file=name,
-                text=chunk.text,
+            entry, stats = _generate_explainer_unit(
+                chunk, name, explainers_dir, level, force, log, course_exam_snippets
             )
             manifest.append(entry)
+            if stats.generated:
+                total_words += stats.words
+                total_source_tokens += stats.source_tokens
+                total_sent_tokens += stats.sent_tokens
+                total_received_tokens += stats.received_tokens
+                generated_count += 1
 
-            if path.exists() and not force:
-                log(f"  = {name}: exists, skipped (use --force to regenerate)")
-                continue
-
-            words = len(chunk.text.split())
-            source_tokens = estimate_tokens(chunk.text)
-            log(f"  + {name}: generating ({words} words, ~{source_tokens} input tokens)...")
-            comp = compress.compress_text(chunk.text, role="explainer")
-            if comp.applied:
-                log(
-                    f"    headroom: {comp.tokens_before}->{comp.tokens_after} tokens "
-                    f"({comp.savings_percent:.0f}% saved)"
-                )
-            sent_tokens = estimate_tokens(comp.text)
-
-            matched_exam = _match_exam_snippets(chunk.text, course_exam_snippets)
-            if matched_exam:
-                log(f"    matched {len(matched_exam)} related exam snippet(s)")
-            else:
-                log("    no strong exam match found; using notes-only exam guidance")
-
-            doc_html = llm.generate_explainer(
-                chunk.title,
-                comp.text,
-                level,
-                exam_snippets=matched_exam,
-            )
-            received_tokens = estimate_tokens(doc_html)
-            log(f"    ~{sent_tokens} tokens sent to LLM -> ~{received_tokens} tokens received")
-            path.write_text(doc_html, encoding="utf-8")
-
-            total_words += words
-            total_source_tokens += source_tokens
-            total_sent_tokens += sent_tokens
-            total_received_tokens += received_tokens
-            generated_count += 1
-
-    (explainers_dir / "manifest.json").write_text(
-        json.dumps(
-            [{k: v for k, v in asdict(e).items() if k != "text"} for e in manifest],
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    render.render_explainer_index(manifest, explainers_dir)
+    _write_manifest_and_index(manifest, explainers_dir)
 
     log(
         f"Summary: {generated_count} explainer(s) generated with strategy={strategy} from "

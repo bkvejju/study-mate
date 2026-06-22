@@ -115,19 +115,125 @@ http://<bucket-name>.s3-website-<region>.amazonaws.com
 
 At this point, navigation and explainer pages work. AI panel calls do not.
 
-## Option B: production-style hosting (recommended)
+## Option B: CloudFront + Origin Access Control (recommended)
 
-Use CloudFront in front of S3 and a dedicated API origin.
+Keeps the S3 bucket fully private (no public bucket policy, no website-hosting
+endpoint needed) and serves it over HTTPS via CloudFront. This also avoids
+AWS account-level "Block Public Access" entirely, since the bucket policy
+below is scoped to one CloudFront distribution rather than `Principal: "*"`.
 
-1. Put static files in S3 (private bucket recommended)
-2. Create CloudFront distribution for static site
-3. Deploy API (for example API Gateway + Lambda)
-4. Add a second CloudFront origin for the API
-5. Add a behavior such as /api/* routed to API origin
-6. Keep frontend calling /api/study (same origin via CloudFront)
-7. Enable HTTPS and custom domain
+### 1. Set variables
 
-This avoids CORS complexity when both static and API are under one domain.
+```bash
+export AWS_REGION=eu-west-1
+export BUCKET_NAME=your-study-mate-site-bucket
+export ACCOUNT_ID=your-aws-account-id
+```
+
+### 2. Create the bucket (private, default settings)
+
+```bash
+aws s3api create-bucket \
+  --bucket "$BUCKET_NAME" \
+  --region "$AWS_REGION" \
+  --create-bucket-configuration LocationConstraint="$AWS_REGION"
+```
+
+### 3. Create an Origin Access Control (OAC)
+
+```bash
+aws cloudfront create-origin-access-control \
+  --origin-access-control-config Name=studymate-oac,SigningProtocol=sigv4,SigningBehavior=always,OriginAccessControlOriginType=s3
+```
+
+Note the returned `Id` as `$OAC_ID`.
+
+### 4. Create the CloudFront distribution
+
+```bash
+cat > /tmp/studymate-cf-config.json << JSON
+{
+  "CallerReference": "studymate-$(date +%s)",
+  "Comment": "StudyMate explainers static site",
+  "Enabled": true,
+  "DefaultRootObject": "index.html",
+  "PriceClass": "PriceClass_100",
+  "Origins": {
+    "Quantity": 1,
+    "Items": [
+      {
+        "Id": "studymate-s3-origin",
+        "DomainName": "${BUCKET_NAME}.s3.${AWS_REGION}.amazonaws.com",
+        "OriginAccessControlId": "${OAC_ID}",
+        "S3OriginConfig": { "OriginAccessIdentity": "" }
+      }
+    ]
+  },
+  "DefaultCacheBehavior": {
+    "TargetOriginId": "studymate-s3-origin",
+    "ViewerProtocolPolicy": "redirect-to-https",
+    "AllowedMethods": {
+      "Quantity": 2,
+      "Items": ["GET", "HEAD"],
+      "CachedMethods": { "Quantity": 2, "Items": ["GET", "HEAD"] }
+    },
+    "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+    "Compress": true
+  }
+}
+JSON
+
+aws cloudfront create-distribution --distribution-config file:///tmp/studymate-cf-config.json
+```
+
+Note the returned `Id` (as `$DISTRIBUTION_ID`), `ARN` (as `$DISTRIBUTION_ARN`),
+and `DomainName` (your `*.cloudfront.net` URL). Deployment takes 5-15 minutes
+— poll with:
+
+```bash
+aws cloudfront get-distribution --id "$DISTRIBUTION_ID" --query 'Distribution.Status' --output text
+```
+
+### 5. Bucket policy scoped to this distribution only
+
+```bash
+cat > /tmp/studymate-cf-bucket-policy.json << JSON
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowCloudFrontServicePrincipal",
+      "Effect": "Allow",
+      "Principal": { "Service": "cloudfront.amazonaws.com" },
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::${BUCKET_NAME}/*",
+      "Condition": {
+        "StringEquals": { "AWS:SourceArn": "${DISTRIBUTION_ARN}" }
+      }
+    }
+  ]
+}
+JSON
+
+aws s3api put-bucket-policy --bucket "$BUCKET_NAME" --policy file:///tmp/studymate-cf-bucket-policy.json
+```
+
+### 6. Upload generated explainers and open the site
+
+```bash
+aws s3 sync generated/explainers/ "s3://$BUCKET_NAME/" --delete
+```
+
+```text
+https://<distribution-domain>.cloudfront.net
+```
+
+### Adding an API origin later
+
+To make the AI panel work, add a second CloudFront origin for the API (for
+example API Gateway + Lambda) with a behavior such as `/api/*` routed to that
+origin, so the frontend keeps calling the same-origin `/api/study` path. This
+avoids CORS entirely, since static and API are under one CloudFront domain.
 
 ## If static and API are on different domains
 
@@ -157,6 +263,23 @@ aws cloudfront create-invalidation \
   --distribution-id YOUR_DISTRIBUTION_ID \
   --paths "/*"
 ```
+
+## Troubleshooting: 403 Access Denied on the S3 website endpoint
+
+If `put-bucket-policy` in Option A succeeds but the site still 403s (including
+on the error document itself), check for an **account-level** S3 Block Public
+Access setting, which overrides any individual bucket's settings:
+
+```bash
+aws s3control get-public-access-block --account-id "$ACCOUNT_ID"
+```
+
+If `BlockPublicPolicy` / `RestrictPublicBuckets` are `true` there, no bucket
+in the account can have a public (`Principal: "*"`) policy until that account
+setting is changed — which affects every bucket in the account, not just this
+one. Prefer Option B (CloudFront + OAC) instead: its bucket policy is scoped
+to a specific distribution ARN, not `Principal: "*"`, so AWS doesn't treat it
+as "public" and it isn't blocked by this account setting.
 
 ## Operational notes
 

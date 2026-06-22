@@ -122,6 +122,55 @@ def test_exam_snippets_are_matched_by_course(monkeypatch):
     assert "sp2-exam.pdf" in matched[0]
 
 
+def test_generate_explainers_from_markdown_writes_files_and_index(tmp_path, monkeypatch):
+    monkeypatch.setenv("STUDYMATE_AI_PROVIDER", "stub")
+    docs = [_doc([("ALPHA\nbody", ["ALPHA"])], source="a.pdf")]
+    explain.generate_explainers(docs, tmp_path, strategy="chapters", log=lambda _msg: None)
+
+    manifest = explain.generate_explainers_from_markdown(
+        tmp_path / "markdown", tmp_path, log=lambda _msg: None
+    )
+
+    assert len(manifest) == 1
+    explainers_dir = tmp_path / "explainers"
+    assert (explainers_dir / manifest[0].file).exists()
+    assert (explainers_dir / "index.html").exists()
+
+
+def test_generate_explainers_from_markdown_matches_exam_snippets(tmp_path, monkeypatch):
+    monkeypatch.setenv("STUDYMATE_AI_PROVIDER", "stub")
+    notes = [_doc([("KINETIC ENERGY and momentum are central ideas", ["Mechanics"])], source="sp2-notes.pdf")]
+    notes[0].course_key = "sp2"
+    exams = [_doc([("This question tests kinetic energy in moving systems", [])], source="sp2-exam.pdf")]
+    exams[0].course_key = "sp2"
+    exams[0].kind = "exam"
+    explain.generate_explainers(
+        notes, tmp_path, exam_docs=exams, strategy="chapters", log=lambda _msg: None
+    )
+
+    captured: list[list[str] | None] = []
+
+    def fake_generate_explainer(title, text, level="intermediate", exam_snippets=None):
+        captured.append(exam_snippets)
+        return "<!DOCTYPE html><html><body>ok</body></html>"
+
+    monkeypatch.setattr(llm, "generate_explainer", fake_generate_explainer)
+    explain.generate_explainers_from_markdown(
+        tmp_path / "markdown", tmp_path, force=True, log=lambda _msg: None
+    )
+
+    assert captured
+    assert captured[0]
+    assert "sp2-exam.pdf" in captured[0][0]
+
+
+def test_generate_explainers_from_markdown_missing_dir_returns_empty(tmp_path):
+    manifest = explain.generate_explainers_from_markdown(
+        tmp_path / "no-such-dir", tmp_path, log=lambda _msg: None
+    )
+    assert manifest == []
+
+
 def test_generate_explainers_passes_exam_snippets(tmp_path, monkeypatch):
     monkeypatch.setenv("STUDYMATE_AI_PROVIDER", "stub")
     notes = [_doc([("ENERGY TRANSFER IN SYSTEMS", ["Energy"])] , source="sp2-notes.pdf")]
